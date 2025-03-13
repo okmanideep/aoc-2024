@@ -46,103 +46,31 @@
 // Want to go with a couple of pre allocated min heap. Read input line by line and add them to the heaps. At the end read from 0-999 in each heap and calculate distance sum
 
 const std = @import("std");
-
-pub fn MinHeap(comptime max_length: i16, T: type) type {
-    return struct {
-        const Self = @This();
-
-        // number of items added so far
-        length: usize,
-        items: *[max_length]T,
-
-        pub fn create(array: *[max_length]T) Self {
-            var ctx: Self = undefined;
-
-            ctx.items = array;
-            ctx.length = 0;
-
-            return ctx;
-        }
-
-        pub fn add(ctx: *Self, e: T) void {
-            if (ctx.length >= max_length) undefined;
-
-            if (ctx.length == 0) {
-                ctx.items[0] = e;
-                ctx.length += 1;
-                return;
-            }
-
-            ctx.items[ctx.length] = insert(ctx.items[0..ctx.length], e);
-            ctx.length += 1;
-        }
-
-        // attempts to insert the element T in the slice which is of a min heap
-        // returns the last/biggest element of the resultant heap [...slice, T]
-        // if e is not the last, then the slice will have the e in a sorted fashion
-        // otherwise, slice is not disturbed and e is returned
-        fn insert(slice: []T, e: T) T {
-            for (slice, 0..) |value, i| {
-                if (e < value) {
-                    slice[i] = e;
-                    return insert(slice[i + 1 ..], value);
-                }
-            }
-
-            return e;
-        }
-    };
-}
+const input = @embedFile("input.txt");
 
 const INPUT_LENGTH = 1000;
-const AocHeap = MinHeap(INPUT_LENGTH, i32);
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer {
-        const deinit_status = gpa.deinit();
-        //fail test; can't try in defer as defer is executed after we return
-        if (deinit_status == .leak) std.testing.expect(false) catch @panic("TEST FAIL");
-    }
-
     const stdout = std.io.getStdOut().writer();
-    try stdout.print("Here we gooooooo\n", .{});
 
     var first_items: [INPUT_LENGTH]i32 = undefined;
-    var first_heap = AocHeap.create(&first_items);
-
     var second_items: [INPUT_LENGTH]i32 = undefined;
-    var second_heap = AocHeap.create(&second_items);
 
-    // read the input line by line
-    const rel_path = try std.fs.path.join(allocator, &.{ "day-1-1", "input.txt" });
-    defer allocator.free(rel_path);
-    const file = try std.fs.cwd().openFile(rel_path, .{ .mode = .read_only });
-    defer file.close();
-
-    var buf_reader = std.io.bufferedReaderSize(16, file.reader());
-    var reader = buf_reader.reader();
-
-    var buf: [16]u8 = undefined;
-    while (first_heap.length < INPUT_LENGTH) : (@memset(&buf, 0)) {
-        _ = reader.readUntilDelimiterOrEof(&buf, '\n') catch |err| {
-            if (err == error.EndOfFile) {
-                break;
-            }
-            return err;
-        };
-
+    var item_count: usize = 0;
+    while (item_count < INPUT_LENGTH) : (item_count += 1) {
+        const start = item_count * 14;
         // parse first 5 bytes as i32
-        first_heap.add(parseDigitsAsI32(buf[0..5]));
-        second_heap.add(parseDigitsAsI32(buf[8..13]));
+        first_items[item_count] = parseDigitsAsI32(@ptrCast(input[start .. start + 5]));
+        second_items[item_count] = parseDigitsAsI32(@ptrCast(input[start + 8 .. start + 13]));
     }
+
+    std.mem.sort(i32, &first_items, {}, comptime std.sort.asc(i32));
+    std.mem.sort(i32, &second_items, {}, comptime std.sort.asc(i32));
 
     var distance_sum: i64 = 0;
     var i: usize = 0;
     while (i < INPUT_LENGTH) : (i += 1) {
         const distance = @abs(second_items[i] - first_items[i]);
-        try stdout.print("{}   {}   {}\n", .{ first_items[i], second_items[i], distance });
         distance_sum += distance;
     }
 
@@ -150,12 +78,7 @@ pub fn main() !void {
 }
 
 fn parseDigitsAsI32(bytes: *const [5]u8) i32 {
-    var result: i32 = 0;
-    for (bytes, 0..) |digit, pos| {
-        result = result + @as(i32, @intCast((digit - '0'))) * std.math.pow(i32, 10, @intCast(4 - pos));
-    }
-
-    return result;
+    return std.fmt.parseInt(i32, bytes, 10) catch unreachable;
 }
 
 test "parsing works as expected" {
@@ -163,40 +86,4 @@ test "parsing works as expected" {
 
     const value = parseDigitsAsI32(&bytes);
     try std.testing.expectEqual(12345, value);
-}
-
-test "Heap additions work as expected when added in order" {
-    var items: [1000]i32 = undefined;
-    var heap = AocHeap.create(&items);
-    try std.testing.expectEqual(0, heap.length);
-
-    var i: i32 = 1;
-    while (i <= 1000) : (i += 1) {
-        heap.add(i);
-        const expectedLength: usize = @intCast(i);
-        try std.testing.expectEqual(expectedLength, heap.length);
-    }
-
-    for (heap.items, 0..) |value, index| {
-        const expectedValue: i32 = @intCast(index + 1);
-        try std.testing.expectEqual(expectedValue, value);
-    }
-}
-
-test "Heap additions work as expected when added in reversed order" {
-    var items: [1000]i32 = undefined;
-    var heap = AocHeap.create(&items);
-    try std.testing.expectEqual(0, heap.length);
-
-    var i: i32 = 1;
-    while (i <= 1000) : (i += 1) {
-        heap.add(1000 - i + 1);
-        const expectedLength: usize = @intCast(i);
-        try std.testing.expectEqual(expectedLength, heap.length);
-    }
-
-    for (heap.items, 0..) |value, index| {
-        const expectedValue: i32 = @intCast(index + 1);
-        try std.testing.expectEqual(expectedValue, value);
-    }
 }
