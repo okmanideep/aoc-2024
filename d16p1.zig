@@ -111,7 +111,11 @@ const Node = struct {
         allocator.destroy(self);
     }
 
-    fn has_visited(self: *Node, pos: Position, visit_cache: *VisitCache) bool {
+    fn isDeadEnd(self: *Node) bool {
+        return self.ahead == null and self.cw == null and self.acw == null;
+    }
+
+    fn hasVisited(self: *Node, pos: Position, visit_cache: *VisitCache) bool {
         const key = VisitCacheKey{ .pos = pos, .node_dir = self.dir, .node_pos = self.pos };
         if (visit_cache.contains(key)) {
             return visit_cache.get(key) orelse unreachable;
@@ -122,7 +126,7 @@ const Node = struct {
             result = true;
         } else {
             if (self.parent) |parent| {
-                result = parent.has_visited(pos, visit_cache);
+                result = parent.hasVisited(pos, visit_cache);
             } else {
                 result = false;
             }
@@ -140,7 +144,7 @@ const VisitCacheKey = struct {
 
 const VisitCache = AutoHashMap(VisitCacheKey, bool);
 
-fn buildTree(allocator: Allocator, grid: *Grid, pos: Position, dir: Direction, parent: ?*Node, visit_cache: *VisitCache) !*Node {
+fn buildTree(allocator: Allocator, grid: *Grid, pos: Position, dir: Direction, parent: ?*Node, visit_cache: *VisitCache) !?*Node {
     var node_ptr = try allocator.create(Node);
     node_ptr.* = Node.init(pos, dir, parent);
 
@@ -150,18 +154,23 @@ fn buildTree(allocator: Allocator, grid: *Grid, pos: Position, dir: Direction, p
     }
 
     const ahead = pos.ahead(dir);
-    if (grid.at(ahead) != '#' and !node_ptr.has_visited(ahead, visit_cache)) {
+    if (grid.at(ahead) != '#' and !node_ptr.hasVisited(ahead, visit_cache)) {
         node_ptr.ahead = try buildTree(allocator, grid, ahead, dir, node_ptr, visit_cache);
     }
 
     const cw = pos.ahead(dir.clockwise());
-    if (grid.at(cw) != '#' and !node_ptr.has_visited(cw, visit_cache)) {
+    if (grid.at(cw) != '#' and !node_ptr.hasVisited(cw, visit_cache)) {
         node_ptr.cw = try buildTree(allocator, grid, cw, dir.clockwise(), node_ptr, visit_cache);
     }
 
     const acw = pos.ahead(dir.antiClockwise());
-    if (grid.at(acw) != '#' and !node_ptr.has_visited(acw, visit_cache)) {
+    if (grid.at(acw) != '#' and !node_ptr.hasVisited(acw, visit_cache)) {
         node_ptr.acw = try buildTree(allocator, grid, acw, dir.antiClockwise(), node_ptr, visit_cache);
+    }
+
+    if (node_ptr.isDeadEnd()) {
+        allocator.destroy(node_ptr);
+        return null;
     }
 
     return node_ptr;
@@ -223,12 +232,12 @@ pub fn main() !void {
     defer visit_cache.deinit();
 
     const root_ptr = try buildTree(allocator, &grid, starting_pos, .right, null, &visit_cache);
-    defer root_ptr.destroy(allocator);
+    defer root_ptr.?.destroy(allocator);
     try std.io.getStdOut().writer().print("Tree built\n", .{});
 
-    computeLeastScores(root_ptr);
+    computeLeastScores(root_ptr.?);
 
-    try std.io.getStdOut().writer().print("Result: {}\n", .{root_ptr.score});
+    try std.io.getStdOut().writer().print("Result: {}\n", .{root_ptr.?.score});
 }
 
 test "aoc first example" {
@@ -266,11 +275,11 @@ test "aoc first example" {
     defer visit_cache.deinit();
 
     const root_ptr = try buildTree(allocator, &grid, starting_pos, .right, null, &visit_cache);
-    defer root_ptr.destroy(allocator);
+    defer root_ptr.?.destroy(allocator);
 
-    computeLeastScores(root_ptr);
+    computeLeastScores(root_ptr.?);
 
-    try std.testing.expectEqual(7036, root_ptr.score);
+    try std.testing.expectEqual(7036, root_ptr.?.score);
 }
 
 test "aoc second example" {
@@ -310,9 +319,9 @@ test "aoc second example" {
     defer visit_cache.deinit();
 
     const root_ptr = try buildTree(allocator, &grid, starting_pos, .right, null, &visit_cache);
-    defer root_ptr.destroy(allocator);
+    defer root_ptr.?.destroy(allocator);
 
-    computeLeastScores(root_ptr);
+    computeLeastScores(root_ptr.?);
 
-    try std.testing.expectEqual(11048, root_ptr.score);
+    try std.testing.expectEqual(11048, root_ptr.?.score);
 }
