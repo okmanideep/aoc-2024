@@ -103,8 +103,20 @@ fn contains(list: []Position, pos: Position) bool {
     return result;
 }
 
+const ScoreCacheKey = struct {
+    pos: Position,
+    dir: Direction,
+};
+
+const ScoreCache = AutoHashMap(ScoreCacheKey, u64);
+
 const MAX = std.math.maxInt(u64);
-fn leastScore(grid: *Grid, pos: Position, dir: Direction, visited: *ArrayList(Position)) !u64 {
+fn leastScore(grid: *Grid, pos: Position, dir: Direction, visited: *ArrayList(Position), cache: *ScoreCache) !u64 {
+    const key = ScoreCacheKey{ .pos = pos, .dir = dir };
+    if (cache.get(key)) |value| {
+        return value;
+    }
+
     if (grid.at(pos) == 'E') return 0;
 
     try visited.append(pos);
@@ -112,7 +124,7 @@ fn leastScore(grid: *Grid, pos: Position, dir: Direction, visited: *ArrayList(Po
     var score: u64 = MAX;
     const ahead = pos.ahead(dir);
     if (grid.at(ahead) != '#' and !contains(visited.items, ahead)) {
-        const ahead_score = try leastScore(grid, ahead, dir, visited);
+        const ahead_score = try leastScore(grid, ahead, dir, visited, cache);
         if (ahead_score < MAX and ahead_score + 1 < score) {
             score = ahead_score + 1;
         }
@@ -120,7 +132,7 @@ fn leastScore(grid: *Grid, pos: Position, dir: Direction, visited: *ArrayList(Po
 
     const cw = pos.ahead(dir.clockwise());
     if (grid.at(cw) != '#' and !contains(visited.items, cw)) {
-        const cw_score = try leastScore(grid, cw, dir.clockwise(), visited);
+        const cw_score = try leastScore(grid, cw, dir.clockwise(), visited, cache);
         if (cw_score < MAX and cw_score + 1000 + 1 < score) {
             score = cw_score + 1000 + 1;
         }
@@ -128,7 +140,7 @@ fn leastScore(grid: *Grid, pos: Position, dir: Direction, visited: *ArrayList(Po
 
     const acw = pos.ahead(dir.antiClockwise());
     if (grid.at(acw) != '#' and !contains(visited.items, acw)) {
-        const acw_score = try leastScore(grid, acw, dir.antiClockwise(), visited);
+        const acw_score = try leastScore(grid, acw, dir.antiClockwise(), visited, cache);
         if (acw_score < MAX and acw_score + 1000 + 1 < score) {
             score = acw_score + 1000 + 1;
         }
@@ -136,6 +148,7 @@ fn leastScore(grid: *Grid, pos: Position, dir: Direction, visited: *ArrayList(Po
 
     _ = visited.pop();
 
+    try cache.put(key, score);
     return score;
 }
 
@@ -162,7 +175,10 @@ pub fn main() !void {
     var visited = ArrayList(Position).init(allocator);
     defer visited.deinit();
 
-    const least_score = try leastScore(&grid, starting_pos, .right, &visited);
+    var scoreCache = ScoreCache.init(allocator);
+    defer scoreCache.deinit();
+
+    const least_score = try leastScore(&grid, starting_pos, .right, &visited, &scoreCache);
 
     try std.io.getStdOut().writer().print("Result: {}\n", .{least_score});
 }
@@ -202,7 +218,10 @@ test "aoc first example" {
     var visited = ArrayList(Position).init(allocator);
     defer visited.deinit();
 
-    const least_score = try leastScore(&grid, starting_pos, .right, &visited);
+    var scoreCache = ScoreCache.init(allocator);
+    defer scoreCache.deinit();
+
+    const least_score = try leastScore(&grid, starting_pos, .right, &visited, &scoreCache);
 
     try std.testing.expectEqual(7036, least_score);
 }
@@ -244,7 +263,10 @@ test "aoc second example" {
     var visited = ArrayList(Position).init(allocator);
     defer visited.deinit();
 
-    const least_score = try leastScore(&grid, starting_pos, .right, &visited);
+    var scoreCache = ScoreCache.init(allocator);
+    defer scoreCache.deinit();
+
+    const least_score = try leastScore(&grid, starting_pos, .right, &visited, &scoreCache);
 
     try std.testing.expectEqual(11048, least_score);
 }
