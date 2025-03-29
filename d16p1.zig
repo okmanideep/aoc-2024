@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
 const Allocator = std.mem.Allocator;
 const INPUT = @embedFile("inputs/day16.txt");
@@ -91,108 +92,51 @@ const Grid = struct {
     }
 };
 
-const Node = struct {
-    pos: Position,
-    dir: Direction,
-    parent: ?*Node,
-    ahead: ?*Node,
-    cw: ?*Node,
-    acw: ?*Node,
-    score: u64,
-
-    fn init(pos: Position, dir: Direction, parent: ?*Node) Node {
-        return Node{ .pos = pos, .dir = dir, .parent = parent, .ahead = null, .cw = null, .acw = null, .score = std.math.maxInt(u64) };
-    }
-
-    fn destroy(self: *Node, allocator: Allocator) void {
-        if (self.acw) |acw| acw.destroy(allocator);
-        if (self.cw) |cw| cw.destroy(allocator);
-        if (self.ahead) |ahead| ahead.destroy(allocator);
-        allocator.destroy(self);
-    }
-
-    fn isDeadEnd(self: *Node) bool {
-        return self.ahead == null and self.cw == null and self.acw == null;
-    }
-
-    fn hasVisited(self: *Node, pos: Position) bool {
-        var result = false;
-        if (std.meta.eql(self.pos, pos)) {
+fn contains(list: []Position, pos: Position) bool {
+    var result = false;
+    for (list) |p| {
+        if (std.meta.eql(p, pos)) {
             result = true;
-        } else {
-            if (self.parent) |parent| {
-                result = parent.hasVisited(pos);
-            } else {
-                result = false;
-            }
+            break;
         }
-        return result;
     }
-};
+    return result;
+}
 
-fn buildTree(allocator: Allocator, grid: *Grid, pos: Position, dir: Direction, parent: ?*Node) !?*Node {
-    var node_ptr = try allocator.create(Node);
-    node_ptr.* = Node.init(pos, dir, parent);
+const MAX = std.math.maxInt(u64);
+fn leastScore(grid: *Grid, pos: Position, dir: Direction, visited: *ArrayList(Position)) !u64 {
+    if (grid.at(pos) == 'E') return 0;
 
-    if (grid.at(pos) == 'E') {
-        node_ptr.score = 0;
-        return node_ptr; // no need to go any where else;
-    }
+    try visited.append(pos);
 
+    var score: u64 = MAX;
     const ahead = pos.ahead(dir);
-    if (grid.at(ahead) != '#' and !node_ptr.hasVisited(ahead)) {
-        node_ptr.ahead = try buildTree(allocator, grid, ahead, dir, node_ptr);
+    if (grid.at(ahead) != '#' and !contains(visited.items, ahead)) {
+        const ahead_score = try leastScore(grid, ahead, dir, visited);
+        if (ahead_score < MAX and ahead_score + 1 < score) {
+            score = ahead_score + 1;
+        }
     }
 
     const cw = pos.ahead(dir.clockwise());
-    if (grid.at(cw) != '#' and !node_ptr.hasVisited(cw)) {
-        node_ptr.cw = try buildTree(allocator, grid, cw, dir.clockwise(), node_ptr);
+    if (grid.at(cw) != '#' and !contains(visited.items, cw)) {
+        const cw_score = try leastScore(grid, cw, dir.clockwise(), visited);
+        if (cw_score < MAX and cw_score + 1000 + 1 < score) {
+            score = cw_score + 1000 + 1;
+        }
     }
 
     const acw = pos.ahead(dir.antiClockwise());
-    if (grid.at(acw) != '#' and !node_ptr.hasVisited(acw)) {
-        node_ptr.acw = try buildTree(allocator, grid, acw, dir.antiClockwise(), node_ptr);
-    }
-
-    if (node_ptr.isDeadEnd()) {
-        allocator.destroy(node_ptr);
-        return null;
-    }
-
-    return node_ptr;
-}
-
-fn computeLeastScores(node: *Node) void {
-    if (node.score == 0) return;
-
-    const max = std.math.maxInt(u64);
-    var score: u64 = max;
-
-    if (node.ahead) |ahead| {
-        computeLeastScores(ahead);
-
-        if (ahead.score < max and ahead.score + 1 < score) {
-            score = ahead.score + 1;
+    if (grid.at(acw) != '#' and !contains(visited.items, acw)) {
+        const acw_score = try leastScore(grid, acw, dir.antiClockwise(), visited);
+        if (acw_score < MAX and acw_score + 1000 + 1 < score) {
+            score = acw_score + 1000 + 1;
         }
     }
 
-    if (node.cw) |cw| {
-        computeLeastScores(cw);
+    _ = visited.pop();
 
-        if (cw.score < max and cw.score + 1000 + 1 < score) {
-            score = cw.score + 1000 + 1;
-        }
-    }
-
-    if (node.acw) |acw| {
-        computeLeastScores(acw);
-
-        if (acw.score < max and acw.score + 1000 + 1 < score) {
-            score = acw.score + 1000 + 1;
-        }
-    }
-
-    node.score = @min(score, node.score);
+    return score;
 }
 
 pub fn main() !void {
@@ -215,13 +159,12 @@ pub fn main() !void {
     const starting_pos_col = starting_pos_index % (size + 1);
     const starting_pos: Position = .{ .col = starting_pos_col, .row = starting_pos_row };
 
-    const root_ptr = try buildTree(allocator, &grid, starting_pos, .right, null);
-    defer root_ptr.?.destroy(allocator);
-    try std.io.getStdOut().writer().print("Tree built\n", .{});
+    var visited = ArrayList(Position).init(allocator);
+    defer visited.deinit();
 
-    computeLeastScores(root_ptr.?);
+    const least_score = try leastScore(&grid, starting_pos, .right, &visited);
 
-    try std.io.getStdOut().writer().print("Result: {}\n", .{root_ptr.?.score});
+    try std.io.getStdOut().writer().print("Result: {}\n", .{least_score});
 }
 
 test "aoc first example" {
@@ -256,12 +199,12 @@ test "aoc first example" {
     const starting_pos_col = starting_pos_index % (size + 1);
     const starting_pos: Position = .{ .col = starting_pos_col, .row = starting_pos_row };
 
-    const root_ptr = try buildTree(allocator, &grid, starting_pos, .right, null);
-    defer root_ptr.?.destroy(allocator);
+    var visited = ArrayList(Position).init(allocator);
+    defer visited.deinit();
 
-    computeLeastScores(root_ptr.?);
+    const least_score = try leastScore(&grid, starting_pos, .right, &visited);
 
-    try std.testing.expectEqual(7036, root_ptr.?.score);
+    try std.testing.expectEqual(7036, least_score);
 }
 
 test "aoc second example" {
@@ -298,10 +241,10 @@ test "aoc second example" {
     const starting_pos_col = starting_pos_index % (size + 1);
     const starting_pos: Position = .{ .col = starting_pos_col, .row = starting_pos_row };
 
-    const root_ptr = try buildTree(allocator, &grid, starting_pos, .right, null);
-    defer root_ptr.?.destroy(allocator);
+    var visited = ArrayList(Position).init(allocator);
+    defer visited.deinit();
 
-    computeLeastScores(root_ptr.?);
+    const least_score = try leastScore(&grid, starting_pos, .right, &visited);
 
-    try std.testing.expectEqual(11048, root_ptr.?.score);
+    try std.testing.expectEqual(11048, least_score);
 }
