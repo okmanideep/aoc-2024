@@ -103,16 +103,16 @@ fn contains(list: []Position, pos: Position) bool {
     return result;
 }
 
-const ScoreCacheKey = struct {
+const Location = struct {
     pos: Position,
     dir: Direction,
 };
 
-const ScoreCache = AutoHashMap(ScoreCacheKey, u64);
+const ScoreCache = AutoHashMap(Location, u64);
 
 const MAX = std.math.maxInt(u64);
 fn leastScore(grid: *Grid, pos: Position, dir: Direction, visited: *ArrayList(Position), cache: *ScoreCache) !u64 {
-    const key = ScoreCacheKey{ .pos = pos, .dir = dir };
+    const key = Location{ .pos = pos, .dir = dir };
     if (cache.get(key)) |value| {
         return value;
     }
