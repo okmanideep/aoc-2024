@@ -115,36 +115,22 @@ const Node = struct {
         return self.ahead == null and self.cw == null and self.acw == null;
     }
 
-    fn hasVisited(self: *Node, pos: Position, visit_cache: *VisitCache) bool {
-        const key = VisitCacheKey{ .pos = pos, .node_dir = self.dir, .node_pos = self.pos };
-        if (visit_cache.contains(key)) {
-            return visit_cache.get(key) orelse unreachable;
-        }
-
+    fn hasVisited(self: *Node, pos: Position) bool {
         var result = false;
         if (std.meta.eql(self.pos, pos)) {
             result = true;
         } else {
             if (self.parent) |parent| {
-                result = parent.hasVisited(pos, visit_cache);
+                result = parent.hasVisited(pos);
             } else {
                 result = false;
             }
         }
-        visit_cache.put(key, result) catch unreachable;
         return result;
     }
 };
 
-const VisitCacheKey = struct {
-    node_pos: Position,
-    node_dir: Direction,
-    pos: Position,
-};
-
-const VisitCache = AutoHashMap(VisitCacheKey, bool);
-
-fn buildTree(allocator: Allocator, grid: *Grid, pos: Position, dir: Direction, parent: ?*Node, visit_cache: *VisitCache) !?*Node {
+fn buildTree(allocator: Allocator, grid: *Grid, pos: Position, dir: Direction, parent: ?*Node) !?*Node {
     var node_ptr = try allocator.create(Node);
     node_ptr.* = Node.init(pos, dir, parent);
 
@@ -154,18 +140,18 @@ fn buildTree(allocator: Allocator, grid: *Grid, pos: Position, dir: Direction, p
     }
 
     const ahead = pos.ahead(dir);
-    if (grid.at(ahead) != '#' and !node_ptr.hasVisited(ahead, visit_cache)) {
-        node_ptr.ahead = try buildTree(allocator, grid, ahead, dir, node_ptr, visit_cache);
+    if (grid.at(ahead) != '#' and !node_ptr.hasVisited(ahead)) {
+        node_ptr.ahead = try buildTree(allocator, grid, ahead, dir, node_ptr);
     }
 
     const cw = pos.ahead(dir.clockwise());
-    if (grid.at(cw) != '#' and !node_ptr.hasVisited(cw, visit_cache)) {
-        node_ptr.cw = try buildTree(allocator, grid, cw, dir.clockwise(), node_ptr, visit_cache);
+    if (grid.at(cw) != '#' and !node_ptr.hasVisited(cw)) {
+        node_ptr.cw = try buildTree(allocator, grid, cw, dir.clockwise(), node_ptr);
     }
 
     const acw = pos.ahead(dir.antiClockwise());
-    if (grid.at(acw) != '#' and !node_ptr.hasVisited(acw, visit_cache)) {
-        node_ptr.acw = try buildTree(allocator, grid, acw, dir.antiClockwise(), node_ptr, visit_cache);
+    if (grid.at(acw) != '#' and !node_ptr.hasVisited(acw)) {
+        node_ptr.acw = try buildTree(allocator, grid, acw, dir.antiClockwise(), node_ptr);
     }
 
     if (node_ptr.isDeadEnd()) {
@@ -228,10 +214,8 @@ pub fn main() !void {
     const starting_pos_row = starting_pos_index / (size + 1);
     const starting_pos_col = starting_pos_index % (size + 1);
     const starting_pos: Position = .{ .col = starting_pos_col, .row = starting_pos_row };
-    var visit_cache = VisitCache.init(allocator);
-    defer visit_cache.deinit();
 
-    const root_ptr = try buildTree(allocator, &grid, starting_pos, .right, null, &visit_cache);
+    const root_ptr = try buildTree(allocator, &grid, starting_pos, .right, null);
     defer root_ptr.?.destroy(allocator);
     try std.io.getStdOut().writer().print("Tree built\n", .{});
 
@@ -271,10 +255,8 @@ test "aoc first example" {
     const starting_pos_row = starting_pos_index / (size + 1);
     const starting_pos_col = starting_pos_index % (size + 1);
     const starting_pos: Position = .{ .col = starting_pos_col, .row = starting_pos_row };
-    var visit_cache = VisitCache.init(allocator);
-    defer visit_cache.deinit();
 
-    const root_ptr = try buildTree(allocator, &grid, starting_pos, .right, null, &visit_cache);
+    const root_ptr = try buildTree(allocator, &grid, starting_pos, .right, null);
     defer root_ptr.?.destroy(allocator);
 
     computeLeastScores(root_ptr.?);
@@ -315,10 +297,8 @@ test "aoc second example" {
     const starting_pos_row = starting_pos_index / (size + 1);
     const starting_pos_col = starting_pos_index % (size + 1);
     const starting_pos: Position = .{ .col = starting_pos_col, .row = starting_pos_row };
-    var visit_cache = VisitCache.init(allocator);
-    defer visit_cache.deinit();
 
-    const root_ptr = try buildTree(allocator, &grid, starting_pos, .right, null, &visit_cache);
+    const root_ptr = try buildTree(allocator, &grid, starting_pos, .right, null);
     defer root_ptr.?.destroy(allocator);
 
     computeLeastScores(root_ptr.?);
