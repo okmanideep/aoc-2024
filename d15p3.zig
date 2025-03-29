@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const posix = std.posix;
+const builtin = @import("builtin");
 const INPUT = @embedFile("inputs/day15.txt");
 
 fn allMatch(bytes: []u8, value: u8) bool {
@@ -382,12 +383,18 @@ fn handle_sigint(_: c_int) callconv(.C) void {
 }
 
 pub fn main() !void {
-    // Register SIGINT handler
-    posix.sigaction(posix.SIG.INT, &posix.Sigaction{
-        .handler = .{ .handler = handle_sigint },
-        .mask = posix.empty_sigset,
-        .flags = 0,
-    }, null);
+    const is_posix = switch (builtin.os.tag) {
+        .linux, .macos, .freebsd, .netbsd, .openbsd, .dragonfly, .solaris, .haiku => true,
+        else => false,
+    };
+    if (is_posix) {
+        // Register SIGINT handler
+        posix.sigaction(posix.SIG.INT, &posix.Sigaction{
+            .handler = .{ .handler = handle_sigint },
+            .mask = posix.empty_sigset,
+            .flags = 0,
+        }, null);
+    }
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -420,6 +427,7 @@ pub fn main() !void {
         grid.execute(cur_command);
         const bytes_to_print = try std.fmt.allocPrint(allocator, "Executed command: {c}\n", .{cur_command});
         try terminal.writeAll(bytes_to_print);
+        allocator.free(bytes_to_print);
         try grid.print();
         command_index += 1;
 
@@ -428,6 +436,7 @@ pub fn main() !void {
         const next_command = INPUT[command_index];
         const next_bytes_to_print = try std.fmt.allocPrint(allocator, "Executed command: {c}\n", .{next_command});
         try terminal.writeAll(next_bytes_to_print);
+        allocator.free(next_bytes_to_print);
 
         _ = try terminal.writeAll("\r");
         for (0..grid.size + 3) |_| {
