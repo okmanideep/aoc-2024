@@ -80,10 +80,20 @@ const Grid = struct {
         return self.bytes[index];
     }
 
-    fn markVisited(self: *Grid, pos: Position, direction: Direction) void {
+    fn markVisited(self: *Grid, pos: Position) void {
         const index = pos.row * (self.size + 1) + pos.col;
-        const char = direction.asChar();
+        const char = 'O';
         self.bytes[index] = char;
+    }
+
+    fn count(self: *Grid, char: u8) u32 {
+        var result: u32 = 0;
+
+        for (self.bytes) |byte| {
+            if (byte == char) result += 1;
+        }
+
+        return result;
     }
 
     fn print(self: *Grid) !void {
@@ -129,6 +139,25 @@ const Location = struct {
         const col = switch (self.dir) {
             .right => self.pos.col + 1,
             .left => self.pos.col - 1,
+            .up => self.pos.col,
+            .down => self.pos.col,
+        };
+
+        const pos: Position = .{ .col = col, .row = row };
+        return .{ .pos = pos, .dir = self.dir };
+    }
+
+    fn behind(self: Location) Location {
+        const row = switch (self.dir) {
+            .right => self.pos.row,
+            .left => self.pos.row,
+            .up => self.pos.row + 1,
+            .down => self.pos.row - 1,
+        };
+
+        const col = switch (self.dir) {
+            .right => self.pos.col - 1,
+            .left => self.pos.col + 1,
             .up => self.pos.col,
             .down => self.pos.col,
         };
@@ -198,10 +227,7 @@ const DestinationQueue = struct {
 const DistanceStore = AutoHashMap(Location, u64);
 const VisitedSet = AutoHashMap(Location, void);
 
-fn traverseDijkstra(grid: *Grid, start: Location, end_pos: Position, allocator: Allocator) !u64 {
-    var store = DistanceStore.init(allocator);
-    defer store.deinit();
-
+fn traverseDijkstra(grid: *Grid, start: Location, end_pos: Position, store: *DistanceStore, allocator: Allocator) !Location {
     var visited = VisitedSet.init(allocator);
     defer visited.deinit();
 
@@ -212,26 +238,29 @@ fn traverseDijkstra(grid: *Grid, start: Location, end_pos: Position, allocator: 
 
     while (queue.pop()) |destination| {
         if (!visited.contains(destination.loc)) {
-            try visit(grid, destination.loc, &store, &queue, &visited, destination.distance);
+            try visit(grid, destination.loc, store, &queue, &visited, destination.distance);
         }
     }
 
     const ending_loc_from_left: Location = .{ .pos = end_pos, .dir = .right };
     const ending_loc_from_down: Location = .{ .pos = end_pos, .dir = .up };
     var least_distance: u64 = MAX;
+    var end_loc: Location = undefined;
     if (store.get(ending_loc_from_left)) |distance| {
         if (distance < least_distance) {
             least_distance = distance;
+            end_loc = ending_loc_from_left;
         }
     }
 
     if (store.get(ending_loc_from_down)) |distance| {
         if (distance < least_distance) {
             least_distance = distance;
+            end_loc = ending_loc_from_down;
         }
     }
 
-    return least_distance;
+    return end_loc;
 }
 
 fn update_store(store: *DistanceStore, loc: Location, distance: u64) !void {
@@ -270,6 +299,32 @@ fn visit(grid: *Grid, loc: Location, store: *DistanceStore, queue: *DestinationQ
     }
 }
 
+fn markBestPath(grid: *Grid, store: *DistanceStore, start_loc: Location, end_loc: Location) !void {
+    grid.markVisited(end_loc.pos);
+
+    const end_score = store.get(end_loc) orelse unreachable;
+    const behind = end_loc.behind();
+    if (store.get(behind)) |behind_score| {
+        if (behind_score + 1 == end_score) {
+            try markBestPath(grid, store, start_loc, behind);
+        }
+    }
+
+    const cw = end_loc.clockwise();
+    if (store.get(cw)) |cw_score| {
+        if (cw_score + 1000 == end_score) {
+            try markBestPath(grid, store, start_loc, cw);
+        }
+    }
+
+    const acw = end_loc.antiClockwise();
+    if (store.get(acw)) |acw_score| {
+        if (acw_score + 1000 == end_score) {
+            try markBestPath(grid, store, start_loc, acw);
+        }
+    }
+}
+
 const MAX = std.math.maxInt(u64);
 
 pub fn main() !void {
@@ -301,9 +356,16 @@ pub fn main() !void {
     const ending_pos_col = ending_pos_index % (size + 1);
     const ending_pos: Position = .{ .col = ending_pos_col, .row = ending_pos_row };
 
-    const least_score = try traverseDijkstra(&grid, .{ .pos = starting_pos, .dir = .right }, ending_pos, allocator);
+    var store = DistanceStore.init(allocator);
+    defer store.deinit();
 
-    try std.io.getStdOut().writer().print("Result: {}\n", .{least_score});
+    const start_loc: Location = .{ .pos = starting_pos, .dir = .right };
+    const end_loc = try traverseDijkstra(&grid, start_loc, ending_pos, &store, allocator);
+
+    try markBestPath(&grid, &store, start_loc, end_loc);
+
+    const count = grid.count('O');
+    try std.io.getStdOut().writer().print("Result: {}\n", .{count});
 }
 
 test "aoc first example" {
@@ -347,12 +409,33 @@ test "aoc first example" {
     const ending_pos_col = ending_pos_index % (size + 1);
     const ending_pos: Position = .{ .col = ending_pos_col, .row = ending_pos_row };
 
-    var visited = ArrayList(Position).init(allocator);
-    defer visited.deinit();
+    var store = DistanceStore.init(allocator);
+    defer store.deinit();
 
-    const least_score = try traverseDijkstra(&grid, .{ .pos = starting_pos, .dir = .right }, ending_pos, allocator);
+    const starting_loc: Location = .{ .pos = starting_pos, .dir = .right };
+    const end_loc = try traverseDijkstra(&grid, starting_loc, ending_pos, &store, allocator);
 
-    try std.testing.expectEqual(7036, least_score);
+    try markBestPath(&grid, &store, starting_loc, end_loc);
+
+    const expected =
+        \\###############
+        \\#.......#....O#
+        \\#.#.###.#.###O#
+        \\#.....#.#...#O#
+        \\#.###.#####.#O#
+        \\#.#.#.......#O#
+        \\#.#.#####.###O#
+        \\#..OOOOOOOOO#O#
+        \\###O#O#####O#O#
+        \\#OOO#O....#O#O#
+        \\#O#O#O###.#O#O#
+        \\#OOOOO#...#O#O#
+        \\#O###.#.#.#O#O#
+        \\#O..#.....#OOO#
+        \\###############
+    ;
+
+    try std.testing.expectEqualSlices(u8, expected, grid.bytes);
 }
 
 test "aoc second example" {
@@ -398,7 +481,33 @@ test "aoc second example" {
     const ending_pos_col = ending_pos_index % (size + 1);
     const ending_pos: Position = .{ .col = ending_pos_col, .row = ending_pos_row };
 
-    const least_score = try traverseDijkstra(&grid, .{ .pos = starting_pos, .dir = .right }, ending_pos, allocator);
+    var store = DistanceStore.init(allocator);
+    defer store.deinit();
 
-    try std.testing.expectEqual(11048, least_score);
+    const start_loc: Location = .{ .pos = starting_pos, .dir = .right };
+    const end_loc = try traverseDijkstra(&grid, start_loc, ending_pos, &store, allocator);
+
+    try markBestPath(&grid, &store, start_loc, end_loc);
+
+    const expected =
+        \\#################
+        \\#...#...#...#..O#
+        \\#.#.#.#.#.#.#.#O#
+        \\#.#.#.#...#...#O#
+        \\#.#.#.#.###.#.#O#
+        \\#OOO#.#.#.....#O#
+        \\#O#O#.#.#.#####O#
+        \\#O#O..#.#.#OOOOO#
+        \\#O#O#####.#O###O#
+        \\#O#O#..OOOOO#OOO#
+        \\#O#O###O#####O###
+        \\#O#O#OOO#..OOO#.#
+        \\#O#O#O#####O###.#
+        \\#O#O#OOOOOOO..#.#
+        \\#O#O#O#########.#
+        \\#O#OOO..........#
+        \\#################
+    ;
+
+    try std.testing.expectEqualSlices(u8, expected, grid.bytes);
 }
