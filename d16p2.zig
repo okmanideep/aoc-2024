@@ -227,7 +227,7 @@ const DestinationQueue = struct {
 const DistanceStore = AutoHashMap(Location, u64);
 const VisitedSet = AutoHashMap(Location, void);
 
-fn traverseDijkstra(grid: *Grid, start: Location, end_pos: Position, store: *DistanceStore, allocator: Allocator) !Location {
+fn traverseDijkstra(grid: *Grid, start: Location, store: *DistanceStore, allocator: Allocator) !void {
     var visited = VisitedSet.init(allocator);
     defer visited.deinit();
 
@@ -235,32 +235,13 @@ fn traverseDijkstra(grid: *Grid, start: Location, end_pos: Position, store: *Dis
     defer queue.deinit();
 
     try queue.append(.{ .distance = 0, .loc = start });
+    try store.put(start, 0);
 
     while (queue.pop()) |destination| {
         if (!visited.contains(destination.loc)) {
             try visit(grid, destination.loc, store, &queue, &visited, destination.distance);
         }
     }
-
-    const ending_loc_from_left: Location = .{ .pos = end_pos, .dir = .right };
-    const ending_loc_from_down: Location = .{ .pos = end_pos, .dir = .up };
-    var least_distance: u64 = MAX;
-    var end_loc: Location = undefined;
-    if (store.get(ending_loc_from_left)) |distance| {
-        if (distance < least_distance) {
-            least_distance = distance;
-            end_loc = ending_loc_from_left;
-        }
-    }
-
-    if (store.get(ending_loc_from_down)) |distance| {
-        if (distance < least_distance) {
-            least_distance = distance;
-            end_loc = ending_loc_from_down;
-        }
-    }
-
-    return end_loc;
 }
 
 fn update_store(store: *DistanceStore, loc: Location, distance: u64) !void {
@@ -301,6 +282,8 @@ fn visit(grid: *Grid, loc: Location, store: *DistanceStore, queue: *DestinationQ
 
 fn markBestPath(grid: *Grid, store: *DistanceStore, start_loc: Location, end_loc: Location) !void {
     grid.markVisited(end_loc.pos);
+
+    if (std.meta.eql(start_loc, end_loc)) return;
 
     const end_score = store.get(end_loc) orelse unreachable;
     const behind = end_loc.behind();
@@ -354,15 +337,34 @@ pub fn main() !void {
 
     const ending_pos_row = ending_pos_index / (size + 1);
     const ending_pos_col = ending_pos_index % (size + 1);
-    const ending_pos: Position = .{ .col = ending_pos_col, .row = ending_pos_row };
+    const end_pos: Position = .{ .col = ending_pos_col, .row = ending_pos_row };
 
     var store = DistanceStore.init(allocator);
     defer store.deinit();
 
     const start_loc: Location = .{ .pos = starting_pos, .dir = .right };
-    const end_loc = try traverseDijkstra(&grid, start_loc, ending_pos, &store, allocator);
+    try traverseDijkstra(&grid, start_loc, &store, allocator);
 
-    try markBestPath(&grid, &store, start_loc, end_loc);
+    const ending_loc_from_left: Location = .{ .pos = end_pos, .dir = .right };
+    const ending_loc_from_down: Location = .{ .pos = end_pos, .dir = .up };
+    var distance_from_left: u64 = undefined;
+    var distance_from_down: u64 = undefined;
+    if (store.get(ending_loc_from_left)) |distance| {
+        distance_from_left = distance;
+    }
+
+    if (store.get(ending_loc_from_down)) |distance| {
+        distance_from_down = distance;
+    }
+
+    if (distance_from_left < distance_from_down) {
+        try markBestPath(&grid, &store, start_loc, ending_loc_from_left);
+    } else if (distance_from_down < distance_from_left) {
+        try markBestPath(&grid, &store, start_loc, ending_loc_from_down);
+    } else {
+        try markBestPath(&grid, &store, start_loc, ending_loc_from_left);
+        try markBestPath(&grid, &store, start_loc, ending_loc_from_down);
+    }
 
     const count = grid.count('O');
     try std.io.getStdOut().writer().print("Result: {}\n", .{count});
@@ -407,15 +409,34 @@ test "aoc first example" {
 
     const ending_pos_row = ending_pos_index / (size + 1);
     const ending_pos_col = ending_pos_index % (size + 1);
-    const ending_pos: Position = .{ .col = ending_pos_col, .row = ending_pos_row };
+    const end_pos: Position = .{ .col = ending_pos_col, .row = ending_pos_row };
 
     var store = DistanceStore.init(allocator);
     defer store.deinit();
 
-    const starting_loc: Location = .{ .pos = starting_pos, .dir = .right };
-    const end_loc = try traverseDijkstra(&grid, starting_loc, ending_pos, &store, allocator);
+    const start_loc: Location = .{ .pos = starting_pos, .dir = .right };
+    try traverseDijkstra(&grid, start_loc, &store, allocator);
 
-    try markBestPath(&grid, &store, starting_loc, end_loc);
+    const ending_loc_from_left: Location = .{ .pos = end_pos, .dir = .right };
+    const ending_loc_from_down: Location = .{ .pos = end_pos, .dir = .up };
+    var distance_from_left: u64 = undefined;
+    var distance_from_down: u64 = undefined;
+    if (store.get(ending_loc_from_left)) |distance| {
+        distance_from_left = distance;
+    }
+
+    if (store.get(ending_loc_from_down)) |distance| {
+        distance_from_down = distance;
+    }
+
+    if (distance_from_left < distance_from_down) {
+        try markBestPath(&grid, &store, start_loc, ending_loc_from_left);
+    } else if (distance_from_down < distance_from_left) {
+        try markBestPath(&grid, &store, start_loc, ending_loc_from_down);
+    } else {
+        try markBestPath(&grid, &store, start_loc, ending_loc_from_left);
+        try markBestPath(&grid, &store, start_loc, ending_loc_from_down);
+    }
 
     const expected =
         \\###############
@@ -479,15 +500,34 @@ test "aoc second example" {
 
     const ending_pos_row = ending_pos_index / (size + 1);
     const ending_pos_col = ending_pos_index % (size + 1);
-    const ending_pos: Position = .{ .col = ending_pos_col, .row = ending_pos_row };
+    const end_pos: Position = .{ .col = ending_pos_col, .row = ending_pos_row };
 
     var store = DistanceStore.init(allocator);
     defer store.deinit();
 
     const start_loc: Location = .{ .pos = starting_pos, .dir = .right };
-    const end_loc = try traverseDijkstra(&grid, start_loc, ending_pos, &store, allocator);
+    try traverseDijkstra(&grid, start_loc, &store, allocator);
 
-    try markBestPath(&grid, &store, start_loc, end_loc);
+    const ending_loc_from_left: Location = .{ .pos = end_pos, .dir = .right };
+    const ending_loc_from_down: Location = .{ .pos = end_pos, .dir = .up };
+    var distance_from_left: u64 = undefined;
+    var distance_from_down: u64 = undefined;
+    if (store.get(ending_loc_from_left)) |distance| {
+        distance_from_left = distance;
+    }
+
+    if (store.get(ending_loc_from_down)) |distance| {
+        distance_from_down = distance;
+    }
+
+    if (distance_from_left < distance_from_down) {
+        try markBestPath(&grid, &store, start_loc, ending_loc_from_left);
+    } else if (distance_from_down < distance_from_left) {
+        try markBestPath(&grid, &store, start_loc, ending_loc_from_down);
+    } else {
+        try markBestPath(&grid, &store, start_loc, ending_loc_from_left);
+        try markBestPath(&grid, &store, start_loc, ending_loc_from_down);
+    }
 
     const expected =
         \\#################
