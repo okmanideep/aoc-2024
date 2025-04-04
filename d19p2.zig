@@ -2,7 +2,7 @@ const std = @import("std");
 const StringSet = std.StringHashMap(void);
 const Allocator = std.mem.Allocator;
 
-const PossibleCountCache = std.StringHashMap(isize);
+const PossibleCountCache = std.StringHashMap(usize);
 
 fn fillTowelSet(towelSet: *StringSet, line: []const u8) !void {
     var tokenizer = std.mem.tokenizeAny(u8, line, ", \n");
@@ -11,22 +11,22 @@ fn fillTowelSet(towelSet: *StringSet, line: []const u8) !void {
     }
 }
 
-fn countPossibilitiesForCombo(towelSet: *StringSet, cache: *PossibleCountCache, combo: []const u8, offset: isize) !isize {
+fn countPossibilitiesForCombo(towelSet: *StringSet, cache: *PossibleCountCache, combo: []const u8, offset: usize) !usize {
     if (combo.len == 0) return offset + 1;
     if (cache.get(combo)) |result| {
-        if (result < 0) return result;
+        if (result > 0) return result + offset;
 
-        return result + offset;
+        return 0;
     }
 
-    var count: isize = 0;
+    var count: usize = 0;
     var divider: usize = 1;
     while (divider <= combo.len) : (divider += 1) {
         if (towelSet.contains(combo[0..divider])) {
             const count_rest = try countPossibilitiesForCombo(towelSet, cache, combo[divider..], count);
             try cache.put(combo, count_rest);
 
-            if (count_rest < 0) {
+            if (count_rest == 0) {
                 continue;
             } else {
                 count = count_rest;
@@ -35,8 +35,8 @@ fn countPossibilitiesForCombo(towelSet: *StringSet, cache: *PossibleCountCache, 
     }
 
     if (count == 0) {
-        try cache.put(combo, -1);
-        return -1;
+        try cache.put(combo, 0);
+        return 0;
     } else {
         try cache.put(combo, count);
         return count + offset;
