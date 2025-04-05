@@ -5,14 +5,10 @@ const Position = struct {
     col: usize,
     row: usize,
 
-    fn hasShortcut(self: Position, other: Position) bool {
-        if (self.row == other.row) {
-            return self.col == other.col + 2 or other.col == self.col + 2;
-        } else if (self.col == other.col) {
-            return self.row == other.row + 2 or other.row == self.row + 2;
-        } else {
-            return false;
-        }
+    fn diff(self: Position, other: Position) usize {
+        const row_diff = if (self.row > other.row) self.row - other.row else other.row - self.row;
+        const col_diff = if (self.col > other.col) self.col - other.col else other.col - self.col;
+        return row_diff + col_diff;
     }
 };
 
@@ -245,7 +241,9 @@ fn countAllShortcuts(allocator: Allocator, end_destination_ptr: *Destination, mi
             const end = destination_list.items[end_index];
             const start = destination_list.items[start_index];
 
-            if (end.pos.hasShortcut(start.pos) and end.distance >= start.distance + 2 + minSave) {
+            const diff = end.pos.diff(start.pos);
+
+            if (diff <= 20 and end.distance >= start.distance + diff + minSave) {
                 count += 1;
             }
         }
