@@ -93,59 +93,6 @@ test "numpad contains A at 2,3" {
     try std.testing.expectEqual(Position{ .col = 2, .row = 3 }, NUMPAD.pos_of('A'));
 }
 
-const QueueItem = struct {
-    from: Position,
-    my_moves_so_far: []const u8,
-    target_moves_to_perform: []const u8,
-
-    fn score(self: QueueItem) usize {
-        return self.my_moves_so_far.len;
-    }
-};
-
-const Deque = struct {
-    list: *ArrayList(QueueItem),
-
-    fn init(allocator: Allocator) Deque {
-        const list_ptr = allocator.create(ArrayList(QueueItem)) catch unreachable;
-        list_ptr.* = ArrayList(QueueItem).init(allocator);
-        return Deque{ .list = list_ptr };
-    }
-
-    inline fn indexToPush(self: *Deque, item: QueueItem) usize {
-        var start: usize = 0;
-        var end: usize = self.list.items.len; // exclusive
-        var cur: usize = start;
-        while (start < end) {
-            cur = start + ((end - start) / 2);
-            if (self.list.items[cur].score() == item.score()) return cur;
-
-            if (self.list.items[cur].score() < item.score()) {
-                end = cur;
-            } else {
-                start = cur + 1;
-            }
-        }
-
-        return cur;
-    }
-
-    fn push(self: *Deque, item: QueueItem) void {
-        self.list.insert(self.indexToPush(item), item) catch unreachable;
-    }
-
-    fn pop(self: *Deque) ?QueueItem {
-        return self.list.pop();
-    }
-};
-
-fn combine(allocator: Allocator, first: []const u8, second: []const u8) []u8 {
-    var byteList = ByteList.init(allocator);
-    byteList.appendSlice(first) catch unreachable;
-    byteList.appendSlice(second) catch unreachable;
-    return byteList.toOwnedSlice() catch unreachable;
-}
-
 const CacheByPositionsKey = struct {
     from: Position,
     dest: Position,
@@ -174,6 +121,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 
 const Robot = struct {
     const Self = Robot;
+    index: usize,
     target: Target,
     performed: *ByteList,
     cache_by_positions: *CacheByPositions,
@@ -181,14 +129,14 @@ const Robot = struct {
     moves_cache: *MovesCache,
     allocator: Allocator,
 
-    fn init(allocator: Allocator, target: Target, cache_by_positions: *CacheByPositions) !Self {
+    fn init(allocator: Allocator, index: usize, target: Target, cache_by_positions: *CacheByPositions) !Self {
         const list_ptr = try allocator.create(ByteList);
         list_ptr.* = ByteList.init(allocator);
         const moves_cache_ptr = try allocator.create(MovesCache);
         moves_cache_ptr.* = MovesCache.init(allocator);
         const cache_by_moves_on_target_ptr = try allocator.create(CacheByMovesOnTarget);
         cache_by_moves_on_target_ptr.* = CacheByMovesOnTarget.init(allocator);
-        return Self{ .target = target, .performed = list_ptr, .cache_by_positions = cache_by_positions, .cache_by_moves_on_target = cache_by_moves_on_target_ptr, .moves_cache = moves_cache_ptr, .allocator = allocator };
+        return Self{ .index = index, .target = target, .performed = list_ptr, .cache_by_positions = cache_by_positions, .cache_by_moves_on_target = cache_by_moves_on_target_ptr, .moves_cache = moves_cache_ptr, .allocator = allocator };
     }
 
     fn deinit(self: *Robot) void {
@@ -313,7 +261,6 @@ const Robot = struct {
 
         var out = ByteList.init(allocator);
         var min_len: usize = std.math.maxInt(usize);
-
         while (my_moves_tokenizer.next()) |moves_on_target| {
             const moves_set_to_perform_on_me = self.movesToPerformOnMe(allocator, moves_on_target);
             if (moves_set_to_perform_on_me.len < min_len) {
@@ -476,9 +423,9 @@ const Setup = struct {
         robot_chain_ptr.* = try RobotChain.initCapacity(allocator, robot_chain_len);
 
         var target = door_ptr.asTarget();
-        for (0..robot_chain_len) |_| {
+        for (0..robot_chain_len) |i| {
             const robot_ptr = try allocator.create(Robot);
-            robot_ptr.* = try Robot.init(allocator, target, cache_by_positions_dpad_ptr);
+            robot_ptr.* = try Robot.init(allocator, i, target, cache_by_positions_dpad_ptr);
 
             try robot_chain_ptr.append(robot_ptr);
 
@@ -560,7 +507,7 @@ pub fn main() !void {
     defer arena_allocator.deinit();
     const allocator = arena_allocator.allocator();
 
-    var setup = try Setup.init(allocator, 16);
+    var setup = try Setup.init(allocator, 25);
     const complexity = try setup.complexity(INPUT);
 
     std.debug.print("Complexity: {d}\n", .{complexity});
