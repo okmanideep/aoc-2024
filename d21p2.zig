@@ -93,89 +93,53 @@ test "numpad contains A at 2,3" {
     try std.testing.expectEqual(Position{ .col = 2, .row = 3 }, NUMPAD.pos_of('A'));
 }
 
-const CacheByPositionsKey = struct {
-    from: Position,
-    dest: Position,
-};
-
-const CacheByPositions = std.AutoHashMap(CacheByPositionsKey, []const u8);
-
 const CacheByMovesOnTarget = std.StringHashMap([]const u8);
 const CacheKey = struct {
     dest: u8,
     from: u8,
 };
 const MovesCache = std.AutoHashMap(CacheKey, []const u8);
-
-const Target = struct {
-    ptr: *anyopaque,
-    movesToPerformFn: *const fn (ptr: *anyopaque, allocator: Allocator, dest: u8, from: u8) error{OutOfMemory}![]const u8,
-    controls: KeyPad,
-
-    fn movesToPerform(self: Target, allocator: Allocator, dest: u8, from: u8) ![]const u8 {
-        return self.movesToPerformFn(self.ptr, allocator, dest, from);
-    }
-};
-
-const ArenaAllocator = std.heap.ArenaAllocator;
+const CostCache = std.AutoHashMap(CacheKey, u64);
 
 const Robot = struct {
     const Self = Robot;
     index: usize,
-    target: Target,
-    performed: *ByteList,
-    cache_by_positions: *CacheByPositions,
-    cache_by_moves_on_target: *CacheByMovesOnTarget,
+    controller: ?*Robot,
     moves_cache: *MovesCache,
+    cost_cache: *CostCache,
     allocator: Allocator,
 
-    fn init(allocator: Allocator, index: usize, target: Target, cache_by_positions: *CacheByPositions) !Self {
-        const list_ptr = try allocator.create(ByteList);
-        list_ptr.* = ByteList.init(allocator);
-        const moves_cache_ptr = try allocator.create(MovesCache);
-        moves_cache_ptr.* = MovesCache.init(allocator);
-        const cache_by_moves_on_target_ptr = try allocator.create(CacheByMovesOnTarget);
-        cache_by_moves_on_target_ptr.* = CacheByMovesOnTarget.init(allocator);
-        return Self{ .index = index, .target = target, .performed = list_ptr, .cache_by_positions = cache_by_positions, .cache_by_moves_on_target = cache_by_moves_on_target_ptr, .moves_cache = moves_cache_ptr, .allocator = allocator };
+    fn init(allocator: Allocator, index: usize, controller: ?*Robot, moves_cache: *MovesCache) !Self {
+        const cost_cache_ptr = try allocator.create(CostCache);
+        cost_cache_ptr.* = CostCache.init(allocator);
+        return Self{ .index = index, .controller = controller, .moves_cache = moves_cache, .cost_cache = cost_cache_ptr, .allocator = allocator };
     }
 
     fn deinit(self: *Robot) void {
-        self.performed.deinit();
-        self.allocator.destroy(self.performed);
-
-        var iterator = self.cache_by_moves_on_target.iterator();
-        while (iterator.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
-        }
-
-        var moves_cache_iterator = self.moves_cache.iterator();
-        while (moves_cache_iterator.next()) |entry| {
-            self.allocator.free(entry.value_ptr.*);
-        }
-
-        self.moves_cache.deinit();
-        self.allocator.destroy(self.moves_cache);
-
-        self.cache_by_moves_on_target.deinit();
-        self.allocator.destroy(self.cache_by_moves_on_target);
+        self.cost_cache.deinit();
+        self.allocator.destroy(self.cost_cache);
     }
 
-    fn movesByPositions(self: *Self, allocator: Allocator, dest: Position, begin: Position) ![]const u8 {
-        const key = CacheByPositionsKey{ .from = begin, .dest = dest };
-        if (self.cache_by_positions.get(key)) |value| {
+    fn moves(self: *Self, dest_key: u8, from_key: u8) ![]const u8 {
+        const allocator = self.allocator;
+        const key = CacheKey{ .from = from_key, .dest = dest_key };
+        if (self.moves_cache.get(key)) |value| {
             return value;
         }
+        const dest = DPAD.pos_of(dest_key);
+        const from = DPAD.pos_of(from_key);
+        const panic = DPAD.pos_of(' ');
         // std.debug.print("movesByPositions(dest: {d},{d} , from: {d},{d})\n", .{ dest.col, dest.row, begin.col, begin.row });
         var out = ByteList.init(allocator);
-        if (dest.col == begin.col and dest.row == begin.row) {
+        defer out.deinit();
+        if (dest.col == from.col and dest.row == from.row) {
             try out.append('A');
-            const result = out.items;
-            try self.cache_by_positions.put(key, try self.allocator.dupe(u8, result));
+            const result = try allocator.dupe(u8, out.items);
+            try self.moves_cache.put(key, result);
             return result;
         }
-        const panic = DPAD.pos_of(' ');
-        var cur = begin;
+        const both_horizontal_and_vertical_required = from.row != dest.row and from.col != dest.col;
+        var cur = from;
         if (cur.col != panic.col or dest.row != panic.row) {
             // vertical first
             while (cur.col != dest.col or cur.row != dest.row) {
@@ -198,9 +162,12 @@ const Robot = struct {
             try out.append('A');
         }
 
-        if (out.items.len == 0) {
-            cur = begin;
+        cur = from;
+        if (both_horizontal_and_vertical_required or out.items.len == 0) {
             if ((cur.row != panic.row or dest.col != panic.col)) {
+                if (out.items.len > 0) {
+                    try out.append('\n');
+                }
                 // horizontal first
                 while (cur.col != dest.col or cur.row != dest.row) {
                     if (cur.col < dest.col) {
@@ -223,106 +190,81 @@ const Robot = struct {
             }
         }
         // std.debug.print("movesByPositions(dest: {d},{d} , from: {d},{d}) = {s}\n", .{ dest.col, dest.row, begin.col, begin.row, out.items });
-        const result = out.items;
-        try self.cache_by_positions.put(key, try self.allocator.dupe(u8, result));
+        const result = try allocator.dupe(u8, out.items);
+        try self.moves_cache.put(key, result);
         return result;
     }
 
-    fn movesToPerformOnMe(self: *Self, allocator: Allocator, moves_on_target: []const u8) []const u8 {
-        const key = self.allocator.dupe(u8, moves_on_target) catch unreachable;
-        if (self.cache_by_moves_on_target.get(key)) |value| {
-            self.allocator.free(key);
+    fn costToPerform(self: *Robot, dest: u8, from: u8) !u64 {
+        const key = CacheKey{ .from = from, .dest = dest };
+        if (self.cost_cache.get(key)) |value| {
             return value;
         }
 
-        var out = ByteList.init(allocator);
+        const moves_set_to_perform = try self.moves(dest, from);
+        var tokenizer = std.mem.tokenizeScalar(u8, moves_set_to_perform, '\n');
+        var best_cost: u64 = std.math.maxInt(u64);
 
-        var from_pos = DPAD.pos_of('A');
-        for (moves_on_target) |move| {
-            const dest_pos = DPAD.pos_of(move);
-            out.appendSlice(self.movesByPositions(allocator, dest_pos, from_pos) catch unreachable) catch unreachable;
-
-            from_pos = dest_pos;
-        }
-
-        const result = out.items;
-        self.cache_by_moves_on_target.put(key, self.allocator.dupe(u8, result) catch unreachable) catch unreachable;
-        return result;
-    }
-
-    fn movesToPerform(self: *Self, allocator: Allocator, dest: u8, from: u8) ![]const u8 {
-        const key = CacheKey{ .dest = dest, .from = from };
-        if (self.moves_cache.get(key)) |value| {
-            return value;
-        }
-        const moves_set_to_peform_on_target = try self.target.movesToPerform(allocator, dest, from);
-
-        var my_moves_tokenizer = std.mem.tokenizeScalar(u8, moves_set_to_peform_on_target, '\n');
-
-        var out = ByteList.init(allocator);
-        var min_len: usize = std.math.maxInt(usize);
-        while (my_moves_tokenizer.next()) |moves_on_target| {
-            const moves_set_to_perform_on_me = self.movesToPerformOnMe(allocator, moves_on_target);
-            if (moves_set_to_perform_on_me.len < min_len) {
-                out.clearRetainingCapacity();
-
-                try out.appendSlice(moves_set_to_perform_on_me);
-                min_len = moves_set_to_perform_on_me.len;
-            } else if (moves_set_to_perform_on_me.len == min_len) {
-                if (out.items.len != 0) {
-                    try out.append('\n');
+        while (tokenizer.next()) |moves_to_perform| {
+            if (self.controller) |controller| {
+                var prev: u8 = 'A';
+                var cost: u64 = 0;
+                for (moves_to_perform) |move| {
+                    cost += try controller.costToPerform(move, prev);
+                    prev = move;
                 }
-                try out.appendSlice(moves_set_to_perform_on_me);
+
+                if (cost < best_cost) {
+                    best_cost = cost;
+                }
+            } else {
+                if (moves_to_perform.len < best_cost) {
+                    best_cost = moves_to_perform.len;
+                }
             }
         }
 
-        const result = out.items;
-        // std.debug.print("{c}-{c}: {s}\n", .{ from, dest, result });
-        try self.moves_cache.put(key, try self.allocator.dupe(u8, result));
-        return result;
-    }
-
-    fn typeErasedMovesToPerform(ptr: *anyopaque, allocator: Allocator, dest: u8, from: u8) ![]const u8 {
-        const robot_ptr: *Robot = @ptrCast(@alignCast(ptr));
-        return robot_ptr.movesToPerform(allocator, dest, from);
-    }
-
-    fn asTarget(self: *Robot) Target {
-        return Target{ .ptr = self, .movesToPerformFn = typeErasedMovesToPerform, .controls = DPAD };
+        try self.cost_cache.put(key, best_cost);
+        return best_cost;
     }
 };
 
 const Door = struct {
-    performed: *ByteList,
-    cache_by_positions: *CacheByPositions,
+    controller: *Robot,
+    moves_cache: *MovesCache,
+    cost_cache: *CostCache,
     allocator: Allocator,
 
-    fn init(allocator: Allocator, cache_by_positions: *CacheByPositions) !Door {
-        const list_ptr = try allocator.create(ByteList);
-        list_ptr.* = ByteList.init(allocator);
-        return Door{ .performed = list_ptr, .cache_by_positions = cache_by_positions, .allocator = allocator };
+    fn init(allocator: Allocator, controller: *Robot, moves_cache: *MovesCache) !Door {
+        const cost_cache_ptr = try allocator.create(CostCache);
+        cost_cache_ptr.* = CostCache.init(allocator);
+        return Door{ .controller = controller, .moves_cache = moves_cache, .cost_cache = cost_cache_ptr, .allocator = allocator };
     }
 
     fn deinit(self: *Door) void {
-        self.performed.deinit();
-        self.allocator.destroy(self.performed);
+        self.cost_cache.deinit();
+        self.allocator.destroy(self.cost_cache);
     }
 
-    fn movesByPositions(self: *Door, allocator: Allocator, dest: Position, begin: Position) ![]const u8 {
-        const key = CacheByPositionsKey{ .from = begin, .dest = dest };
-        if (self.cache_by_positions.get(key)) |value| {
+    fn moves(self: *Door, dest_key: u8, from_key: u8) ![]const u8 {
+        const key = CacheKey{ .from = from_key, .dest = dest_key };
+        if (self.moves_cache.get(key)) |value| {
             return value;
         }
+        const allocator = self.allocator;
+        const dest = NUMPAD.pos_of(dest_key);
+        const from = NUMPAD.pos_of(from_key);
+        const panic = NUMPAD.pos_of(' ');
         // std.debug.print("movesByPositions(dest: {d},{d} , from: {d},{d})\n", .{ dest.col, dest.row, begin.col, begin.row });
         var out = ByteList.init(allocator);
-        if (dest.col == begin.col and dest.row == begin.row) {
+        defer out.deinit();
+        if (dest.col == from.col and dest.row == from.row) {
             try out.append('A');
-            const result = out.items;
-            try self.cache_by_positions.put(key, try self.allocator.dupe(u8, result));
+            const result = try self.allocator.dupe(u8, out.items);
+            try self.moves_cache.put(key, result);
             return result;
         }
-        const panic = NUMPAD.pos_of(' ');
-        var cur = begin;
+        var cur = from;
         const requires_both_vertical_and_horizontal = cur.col != dest.col and cur.row != dest.row;
         if (cur.col != panic.col or dest.row != panic.row) {
             // vertical first
@@ -346,7 +288,7 @@ const Door = struct {
             try out.append('A');
         }
 
-        cur = begin;
+        cur = from;
         if ((cur.row != panic.row or dest.col != panic.col) and requires_both_vertical_and_horizontal) {
             if (out.items.len > 0) {
                 try out.append('\n');
@@ -372,31 +314,37 @@ const Door = struct {
             try out.append('A');
         }
         // std.debug.print("movesByPositions(dest: {d},{d} , from: {d},{d}) = {s}\n", .{ dest.col, dest.row, begin.col, begin.row, out.items });
-        const result = out.items;
-        try self.cache_by_positions.put(key, try self.allocator.dupe(u8, result));
+        const result = try self.allocator.dupe(u8, out.items);
+        try self.moves_cache.put(key, result);
         return result;
     }
 
-    fn movesToPerform(self: *Door, allocator: Allocator, dest: u8, from: u8) ![]const u8 {
-        const dest_pos = NUMPAD.pos_of(dest);
-        const from_pos = NUMPAD.pos_of(from);
+    fn costToPerform(self: *Door, dest: u8, from: u8) !u64 {
+        const key = CacheKey{ .from = from, .dest = dest };
+        if (self.cost_cache.get(key)) |value| {
+            return value;
+        }
 
-        const result = try self.movesByPositions(allocator, dest_pos, from_pos);
-        // std.debug.print("{c}-{c}: {s}\n", .{ from, dest, result });
-        return result;
-    }
+        const moves_set_to_perform = try self.moves(dest, from);
+        var tokenizer = std.mem.tokenizeScalar(u8, moves_set_to_perform, '\n');
+        var best_cost: u64 = std.math.maxInt(u64);
+        const controller = self.controller;
 
-    fn controls(_: *Door) KeyPad {
-        return NUMPAD;
-    }
+        while (tokenizer.next()) |moves_to_perform| {
+            var prev: u8 = 'A';
+            var cost: u64 = 0;
+            for (moves_to_perform) |move| {
+                cost += try controller.costToPerform(move, prev);
+                prev = move;
+            }
 
-    fn typeErasedMovesToPerform(ptr: *anyopaque, allocator: Allocator, dest: u8, from: u8) ![]const u8 {
-        const door_ptr: *Door = @ptrCast(@alignCast(ptr));
-        return door_ptr.movesToPerform(allocator, dest, from);
-    }
+            if (cost < best_cost) {
+                best_cost = cost;
+            }
+        }
 
-    fn asTarget(self: *Door) Target {
-        return Target{ .ptr = self, .movesToPerformFn = typeErasedMovesToPerform, .controls = NUMPAD };
+        try self.cost_cache.put(key, best_cost);
+        return best_cost;
     }
 };
 
@@ -405,64 +353,52 @@ const RobotChain = ArrayList(*Robot);
 const Setup = struct {
     door: *Door,
     robot_chain: *RobotChain,
-    cache_by_positions_numpad: *CacheByPositions,
-    cache_by_positions_dpad: *CacheByPositions,
+    moves_cache: *MovesCache,
     allocator: Allocator,
 
     fn init(allocator: Allocator, robot_chain_len: u8) !Setup {
-        const cache_by_positions_numpad_ptr = try allocator.create(CacheByPositions);
-        cache_by_positions_numpad_ptr.* = CacheByPositions.init(allocator);
-
-        const door_ptr = try allocator.create(Door);
-        door_ptr.* = try Door.init(allocator, cache_by_positions_numpad_ptr);
-
-        const cache_by_positions_dpad_ptr = try allocator.create(CacheByPositions);
-        cache_by_positions_dpad_ptr.* = CacheByPositions.init(allocator);
+        const moves_cache_ptr = try allocator.create(MovesCache);
+        moves_cache_ptr.* = MovesCache.init(allocator);
 
         const robot_chain_ptr = try allocator.create(RobotChain);
         robot_chain_ptr.* = try RobotChain.initCapacity(allocator, robot_chain_len);
 
-        var target = door_ptr.asTarget();
+        var controller: ?*Robot = null;
         for (0..robot_chain_len) |i| {
             const robot_ptr = try allocator.create(Robot);
-            robot_ptr.* = try Robot.init(allocator, i, target, cache_by_positions_dpad_ptr);
+            robot_ptr.* = try Robot.init(allocator, i, controller, moves_cache_ptr);
 
             try robot_chain_ptr.append(robot_ptr);
 
-            target = robot_ptr.asTarget();
+            controller = robot_ptr;
         }
+
+        const door_ptr = try allocator.create(Door);
+        door_ptr.* = try Door.init(allocator, controller.?, moves_cache_ptr);
 
         return Setup{
             .door = door_ptr,
             .robot_chain = robot_chain_ptr,
-            .cache_by_positions_numpad = cache_by_positions_numpad_ptr,
-            .cache_by_positions_dpad = cache_by_positions_dpad_ptr,
+            .moves_cache = moves_cache_ptr,
             .allocator = allocator,
         };
     }
 
     fn deinit(self: *Setup) void {
-        self.door.deinit();
         for (self.robot_chain.items) |robot_ptr| {
             robot_ptr.deinit();
             self.allocator.destroy(robot_ptr);
         }
         self.robot_chain.deinit();
+        self.door.deinit();
 
-        var iterator = self.cache_by_positions_numpad.iterator();
+        var iterator = self.moves_cache.iterator();
         while (iterator.next()) |entry| {
             self.allocator.free(entry.value_ptr.*);
         }
+        self.moves_cache.deinit();
 
-        iterator = self.cache_by_positions_dpad.iterator();
-        while (iterator.next()) |entry| {
-            self.allocator.free(entry.value_ptr.*);
-        }
-
-        self.cache_by_positions_numpad.deinit();
-        self.cache_by_positions_dpad.deinit();
-        self.allocator.destroy(self.cache_by_positions_numpad);
-        self.allocator.destroy(self.cache_by_positions_dpad);
+        self.allocator.destroy(self.moves_cache);
         self.allocator.destroy(self.door);
         self.allocator.destroy(self.robot_chain);
     }
@@ -470,30 +406,17 @@ const Setup = struct {
     fn complexity(self: *Setup, codes: []const u8) !u64 {
         var result: u64 = 0;
         var line_tokenizer = std.mem.tokenizeScalar(u8, codes, '\n');
-        const last_robot: *Robot = self.robot_chain.items[self.robot_chain.items.len - 1];
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena.deinit();
-        const allocator = arena.allocator();
 
         while (line_tokenizer.next()) |moves| {
             var from: u8 = 'A';
             var cost: u64 = 0;
             for (moves) |move| {
-                const mtp = try last_robot.movesToPerform(allocator, move, from);
-                var tokenizer = std.mem.tokenizeScalar(u8, mtp, '\n');
-                if (tokenizer.next()) |first_move| {
-                    cost += first_move.len;
-                } else {
-                    unreachable;
-                }
-
+                cost += try self.door.costToPerform(move, from);
                 from = move;
-                _ = arena.reset(.retain_capacity);
             }
-            const len: u64 = cost;
             const code_num = try std.fmt.parseInt(u64, moves[0 .. moves.len - 1], 10);
 
-            result += len * code_num;
+            result += cost * code_num;
         }
 
         return result;
@@ -503,11 +426,13 @@ const Setup = struct {
 const INPUT = @embedFile("inputs/day21.txt");
 
 pub fn main() !void {
-    var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena_allocator.deinit();
-    const allocator = arena_allocator.allocator();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
+    const allocator = gpa.allocator();
 
     var setup = try Setup.init(allocator, 25);
+    defer setup.deinit();
+
     const complexity = try setup.complexity(INPUT);
 
     std.debug.print("Complexity: {d}\n", .{complexity});
