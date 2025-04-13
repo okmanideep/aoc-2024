@@ -51,11 +51,11 @@ const IntSet = struct {
         return IntSet{ .backing_map = map_ptr, .allocator = allocator };
     }
 
-    fn initWithList(allocator: Allocator, list: *IntList) !IntSet {
+    fn initWithSlice(allocator: Allocator, slice: []u16) !IntSet {
         var set = try IntSet.init(allocator);
-        try set.backing_map.ensureTotalCapacity(list.items.len);
+        try set.backing_map.ensureTotalCapacity(slice.len);
 
-        for (list.items) |item| {
+        for (slice) |item| {
             try set.append(item);
         }
 
@@ -295,10 +295,12 @@ const Graph = struct {
 
     fn getLargestParty(self: *Graph, out: *SortedIntList) !void {
         var largest_party = try SortedIntList.init(self.allocator);
+
         var arena = ArenaAllocator.init(self.allocator);
         defer arena.deinit();
 
         const arena_allocator = arena.allocator();
+
 
         var completed = try IntSet.init(self.allocator);
         defer completed.deinit();
@@ -309,7 +311,11 @@ const Graph = struct {
 
             const members = try SortedIntList.initSingle(arena_allocator, name);
             var party = try SortedIntList.init(arena_allocator);
-            try self.largestParty(&arena, &party, &members, node.connections, &completed);
+            const connections = try node.connections.cloneWithAllocator(arena_allocator);
+            var sorted_connections = try arena_allocator.dupe(u16, connections.values());
+            self.sortByConnectionCount(sorted_connections[0..]);
+            const potential_members = try IntSet.initWithSlice(arena_allocator, sorted_connections);
+            try self.largestParty(&arena, &party, &members, &potential_members, &completed);
             if (party.len() > largest_party.len()) {
                 largest_party.deinit();
 
@@ -322,6 +328,60 @@ const Graph = struct {
 
         try out.copyFrom(&largest_party);
         largest_party.deinit();
+    }
+
+    fn sortByConnectionCount(self: *Graph, names: []u16) void {
+        // build max heap
+        var i: usize = (names.len / 2) - 1;
+        while (i >= 0) {
+            self.heapify(names, i);
+
+            if (i > 0) {
+                i -= 1;
+            } else {
+                break;
+            }
+        }
+
+        var last: usize = names.len - 1;
+        while (last > 0) : (last -= 1) {
+            const temp = names[last];
+            names[last] = names[0];
+            names[0] = temp;
+
+            self.heapify(names[0..last], 0);
+        }
+    }
+
+    fn heapify(self: *Graph, names: []u16, index: usize) void {
+        const left = 2 * index + 1;
+        const right = 2 * index + 2;
+
+        var largest = index;
+
+        const node = self.node_map.get(names[index]) orelse unreachable;
+        const score = node.connections.len();
+        if (left < names.len) {
+            const left_node = self.node_map.get(names[left]) orelse unreachable;
+            const left_score = left_node.connections.len();
+
+            if (left_score > score) {
+                largest = left;
+            }
+        }
+
+        if (right < names.len) {
+            const right_node = self.node_map.get(names[right]) orelse unreachable;
+            const right_score = right_node.connections.len();
+
+            if (right_score > score) {
+                largest = right;
+            }
+        }
+
+        if (largest != index) {
+            self.heapify(names, largest);
+        }
     }
 };
 
