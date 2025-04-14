@@ -78,6 +78,11 @@ const IntSet = struct {
         return self.backing_map.keys();
     }
 
+    fn last(self: *const IntSet) u16 {
+        const items = self.values();
+        return items[items.len - 1];
+    }
+
     fn len(self: *const IntSet) usize {
         return self.backing_map.keys().len;
     }
@@ -271,8 +276,22 @@ const Graph = struct {
         const allocator = arena.allocator();
         var largest_party = try members.cloneWithAllocator(allocator);
 
+        // last because we know that potential_members are sorted by their degree
+        // and most connected pivot allows for most optimisation by skipping most
+        // iterations
+        const pivot = potential_members.last();
+        const pivot_node = self.node_map.get(pivot) orelse unreachable;
+        const pivot_connections = pivot_node.connections;
+
         var completed = try without.cloneWithAllocator(allocator);
         for (potential_members.values()) |item| {
+            if (pivot_connections.contains(item)) {
+                // skip because we will get to them via the pivot
+                // optimisation by arriving at a clique only via one way and all the
+                // members of the clique
+                continue;
+            }
+
             var new_members = try members.cloneWithAllocator(allocator);
             try new_members.append(item);
             const node = self.node_map.get(item) orelse unreachable;
